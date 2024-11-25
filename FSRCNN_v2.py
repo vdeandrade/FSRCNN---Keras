@@ -6,7 +6,7 @@ from tensorflow.image import psnr
 from keras.models import Model
 from keras.optimizers import Adam
 from keras.layers import Conv2D, Input, Conv2DTranspose, PReLU
-from keras.callbacks import ModelCheckpoint
+from keras.callbacks import ModelCheckpoint, TensorBoard
 from keras.preprocessing.image import ImageDataGenerator
 import matplotlib.pyplot as plt
 import glob
@@ -14,10 +14,11 @@ import glob
 #%% USER INPUT:
 #--------------------------------------------------
 train_image_paths = glob.glob("./data/train/*.png")
-test_image_paths = glob.glob("./data/test/*.png")
+test_image_paths = glob.glob("./data/test/Set14/*.bmp")
 batch_size = 64
 epochs = 500
 im_scaling = 3
+aug_factor = 5 # will add to the training data X the amount of traning data
 #--------------------------------------------------
 
 #%% FUNCTIONS:
@@ -106,7 +107,7 @@ def augment_dataset(dataset, datagen):
     
     return augmented_dataset
 
-def create_dataset(image_paths, scale, batch_size, augment=False, augment_factor=1, buffer_size=tf.data.AUTOTUNE):
+def create_dataset(image_paths, scale, batch_size, augment=False, augment_factor=aug_factor, buffer_size=tf.data.AUTOTUNE):
     """
     Creates a tf.data.Dataset with optional augmentation, mixing original and augmented images.
     """
@@ -122,9 +123,46 @@ def create_dataset(image_paths, scale, batch_size, augment=False, augment_factor
     dataset = dataset.batch(batch_size).prefetch(tf.data.AUTOTUNE)
     return dataset
 
+#%% DIAGNOSTICS:
+
+tensorboard = TensorBoard(log_dir='./logs', histogram_freq=1, write_graph=True, write_images=True)
+
+import matplotlib.pyplot as plt
+from keras.callbacks import Callback
+
+class PlotLosses(Callback):
+    def on_train_begin(self, logs={}):
+        self.losses = []
+        self.val_losses = []
+        self.psnr = []
+        self.val_psnr = []
+
+    def on_epoch_end(self, epoch, logs={}):
+        self.losses.append(logs.get('loss'))
+        self.val_losses.append(logs.get('val_loss'))
+        self.psnr.append(logs.get('psnr'))
+        self.val_psnr.append(logs.get('val_psnr'))
+
+        plt.figure(figsize=(12, 4))
+        plt.subplot(1, 2, 1)
+        plt.plot(self.losses, label='Training Loss')
+        plt.plot(self.val_losses, label='Validation Loss')
+        plt.legend()
+        plt.title('Loss')
+
+        plt.subplot(1, 2, 2)
+        plt.plot(self.psnr, label='Training PSNR')
+        plt.plot(self.val_psnr, label='Validation PSNR')
+        plt.legend()
+        plt.title('PSNR')
+
+        plt.show()
+
+plot_losses = PlotLosses()
+
 #%% Create train and test datasets
-train_dataset = create_dataset(train_image_paths, scale=im_scaling, batch_size=batch_size, augment=True)
-test_dataset = create_dataset(test_image_paths, scale=im_scaling, batch_size=batch_size, augment=False)
+train_dataset = create_dataset(train_image_paths, scale=im_scaling, batch_size=batch_size, augment=True, augment_factor=aug_factor)
+test_dataset = create_dataset(test_image_paths, scale=im_scaling, batch_size=batch_size, augment=False, augment_factor=aug_factor)
 
 disp_batch_num = 0 # index of the batch choosen to display an example of augmented low and high res images
 for lr, hr in train_dataset.take(disp_batch_num): # squeeze removes the batch and channel dimensions
@@ -179,7 +217,7 @@ model.summary() # print the model summary
 filepath = "./checkpoints/weights-improvement-{epoch:02d}-{val_psnr:.2f}.hdf5"
 checkpoint = ModelCheckpoint(
     filepath, monitor='val_psnr', save_best_only=True, mode='max', verbose=1)
-callbacks_list = [checkpoint]
+callbacks_list = [checkpoint, plot_losses, tensorboard]
 
 
 #%%
