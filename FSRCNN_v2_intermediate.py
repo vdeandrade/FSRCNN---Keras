@@ -7,23 +7,21 @@ from keras.models import Model
 from keras.optimizers import Adam
 from keras.layers import Conv2D, Input, Conv2DTranspose, PReLU
 from keras.callbacks import ModelCheckpoint, TensorBoard, Callback
-from keras.backend import clear_session
 import matplotlib.pyplot as plt
 import glob, time
 
 
 #%%
 print("\033[H\033[J"); time.sleep(0.1) # clear the ipython console before starting the code.
-clear_session()
 
 #%% USER INPUT:
 #--------------------------------------------------
 train_image_paths = glob.glob("./data/train/*.png")
 test_image_paths = glob.glob("./data/test/Set14/*.bmp")
-hr_img_size = (256, 256)
+img_size = (256, 256, 1)
 batch_size = 64
 epochs = 500
-scaling = 3
+im_scaling = 3
 aug_factor = 5 # will add to the training data X times the amount of training data
 #--------------------------------------------------
 
@@ -55,7 +53,7 @@ def generate_lr(hr_image, scale=2):
     return lr_image
 
 # Preprocessing function for tf.data.Dataset
-def preprocess(filepath, scale, target_size=(256, 256)):
+def preprocess(filepath, scale):
     """
     Preprocesses an image by generating its low-resolution version.
     Args:
@@ -64,26 +62,19 @@ def preprocess(filepath, scale, target_size=(256, 256)):
     Returns:
         A tuple (lr_image, hr_image) containing the low-resolution and high-resolution images.
     """
-    # Load the HR image
-    hr_image = load_image(filepath)
-    
-    # Ensure the HR image has consistent size
-    hr_image, _ = crop_and_pad_images(hr_image, hr_image, target_size)  # Only crop/pad HR image
-    
-    # Generate the LR image by downscaling
-    lr_image = generate_lr(hr_image, scale)
-    
+    hr_image = load_image(filepath)  # Load HR image
+    lr_image = generate_lr(hr_image, scale)  # Generate LR image
     return lr_image, hr_image
 
 
-#%% SCALING TRAINING IMAGES:
-#---------------------------
+#%% SCALING TRAINMING IMAGES:
+#----------------------------
 # Training images are of various size. These functions ensure their size
 # become constant thanks to cropping of padding before starting the training
 def crop_and_pad_images(lr_image, hr_image, target_size=(256, 256)):
     """
     Crops images larger than target_size and pads images smaller than target_size.
-    Cropping removes borders equally from all sides. 
+    Cropping removes borders equally from all sides.
     Padding adds zero-padding to make up the difference in size.
 
     Args:
@@ -187,11 +178,16 @@ def create_dataset(image_paths, scale, batch_size, target_size=(256, 256), augme
     Returns:
         A tf.data.Dataset combining original and augmented images.
     """
+    def preprocess_with_crop_and_pad(filepath, scale):
+        hr_image = load_image(filepath)
+        lr_image = generate_lr(hr_image, scale)
+        lr_image, hr_image = crop_and_pad_images(lr_image, hr_image, target_size)
+        return lr_image, hr_image
 
-    # Map the preprocess function
+    # Load and preprocess images
     dataset = tf.data.Dataset.from_tensor_slices(image_paths)
     dataset = dataset.map(
-        lambda path: preprocess(path, scale, target_size),
+        lambda path: preprocess_with_crop_and_pad(path, scale),
         num_parallel_calls=tf.data.AUTOTUNE)
     
     # Augment and combine datasets
@@ -231,13 +227,14 @@ class PlotLosses(Callback):
 plot_losses = PlotLosses()
 
 #%% Create train and test datasets
-train_dataset = create_dataset(train_image_paths, scaling, batch_size, target_size=hr_img_size, augment=True, augment_factor=aug_factor)
-test_dataset = create_dataset(test_image_paths, scaling, batch_size, target_size=hr_img_size, augment=False)
+train_dataset = create_dataset(train_image_paths, im_scaling, batch_size, target_size=img_size, augment=True, augment_factor=aug_factor)
+test_dataset = create_dataset(test_image_paths, im_scaling, batch_size, target_size=img_size, augment=False)
 
 # Check the first few elements of the dataset
-for lr, hr in train_dataset.take(1):
-    print("Low-res shape:", lr.shape)
-    print("High-res shape:", hr.shape)
+# for lr, hr in train_dataset.take(1):
+#     print("Low-res shape:", lr.shape)
+#     print("High-res shape:", hr.shape)
+
 
 disp_batch_num = 0 # index of the batch choosen to display an example of augmented low and high res images
 for lr, hr in train_dataset.take(disp_batch_num): # squeeze removes the batch and channel dimensions
@@ -248,8 +245,7 @@ for lr, hr in train_dataset.take(disp_batch_num): # squeeze removes the batch an
 #%% Build the model:
 #-------------------
 # input_img = Input(shape=(None, None, 1))
-lr_img_size = tuple(dim // scaling for dim in hr_img_size) + (1,)
-input_img = Input(shape=lr_img_size)
+input_img = Input(shape=img_size)
 
 # 1) Feature extraction layer:
 model = Conv2D(56, (5, 5), padding='same', kernel_initializer='he_normal')(input_img)
@@ -270,12 +266,12 @@ model = PReLU()(model)
 model = Conv2D(56, (1, 1), padding='same', kernel_initializer='he_normal')(model)
 model = PReLU()(model)
 # 5) Deconvolution layer performs upscaling to obtain the final HR image
-model = Conv2DTranspose(1, (9, 9), strides=(scaling, scaling), padding='same')(model)
+model = Conv2DTranspose(1, (9, 9), strides=(4, 4), padding='same')(model)
 
 
 #%%
 output_img = model
-model = Model(input_img, output_img, name="FSRCNN")
+model = Model(input_img, output_img)
 # model.load_weights('./checkpoints/weights-improvement-20-26.93.hdf5')
 
 # Calculates PSNR between 2 tensors.The max_val argument specifies the dynamic
@@ -292,11 +288,19 @@ model.compile(
 model.summary() # print the model summary
 
 #%% Define checkpoint callback
+filepath = "./checkpoints/weights-improvement-{epoch:02d}-{val_psnr:.2f}.hdf5"
+checkpoint = ModelCheckpoint(
+    filepath, monitor='val_psnr', save_best_only=True, mode='max', verbose=1)
+callbacks_list = [checkpoint, plot_losses, tensorboard]
+
+
+#%%
 filepath = "./checkpoints/best_model.h5"
 checkpoint = ModelCheckpoint(
     filepath, monitor='val_psnr', save_best_only=True, mode='max', verbose=1) # Mode set to 'max' because PSNR improves as the model gets better
     # filepath, monitor='val_loss', save_best_only=True, mode='min', verbose=1)
-callbacks_list = [checkpoint, plot_losses, tensorboard]
+
+callbacks_list = [checkpoint]
 
 # Train the model
 #----------------
