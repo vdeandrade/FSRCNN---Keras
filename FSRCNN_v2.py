@@ -6,12 +6,25 @@ from tensorflow.image import psnr
 from keras.models import Model
 from keras.optimizers import Adam
 from keras.layers import Conv2D, Input, Conv2DTranspose, PReLU
-from keras.callbacks import ModelCheckpoint, TensorBoard, Callback
+from keras.callbacks import ModelCheckpoint, TensorBoard, EarlyStopping, Callback
 from keras.metrics import MeanMetricWrapper
 from keras.backend import clear_session
 from numpy import ceil
 import matplotlib.pyplot as plt
-import glob, time, os, logging
+import glob, time, os, logging, datetime
+
+
+#%% USER INPUT:
+#------------------------------------------------------------------------------------
+train_image_paths = glob.glob("./data/train/*.png")
+test_image_paths = glob.glob("./data/test/Set5_Set14_some_urban100/*.png")
+hr_img_size = (258, 258) # CHOOSE THE TARGET SIZE FOR ITS DIVISION WITH THE SCALING FACTOR TO RETURN AN EVEN NUMBER
+batch_size = 64
+epochs = 500
+scaling = 3
+aug_factor = 4 # will add to the training data X times the amount of training data
+model_name = "FSRCNN" # the scaling factor will be added to the name automatically
+#------------------------------------------------------------------------------------
 
 
 #%% Initial code setup:
@@ -19,18 +32,6 @@ print("\033[H\033[J"); time.sleep(0.1) # clear the ipython console before starti
 clear_session()
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'True' # Add environment variables to handle OpenMP conflicts
 logging.basicConfig(level=logging.INFO)
-
-
-#%% USER INPUT:
-#--------------------------------------------------
-train_image_paths = glob.glob("./data/train/*.png")
-test_image_paths = glob.glob("./data/test/Set14/*.png")
-hr_img_size = (258, 258) # CHOOSE THE TARGET SIZE FOR ITS DIVISION WITH THE SCALING FACTOR TO RETURN AN EVEN NUMBER
-batch_size = 64
-epochs = 500
-scaling = 3
-aug_factor = 2 # will add to the training data X times the amount of training data
-#--------------------------------------------------
 
 
 #%% FUNCTIONS:
@@ -184,7 +185,7 @@ def augment_dataset(dataset):
     return new_dataset
 
 
-def create_dataset(image_paths, scale, batch_size, target_size=(256, 256), augment=False, augment_factor=1, buffer_size=1000):
+def create_dataset(image_paths, scale, batch_size, target_size=(256, 256), augment=False, augment_factor=1, buffer_size=1000, is_test=False):
     """
     Creates a tf.data.Dataset with optional augmentation, mixing original and augmented images.
     Args:
@@ -219,26 +220,59 @@ def create_dataset(image_paths, scale, batch_size, target_size=(256, 256), augme
     if buffer_size > 0:  # Shuffle only if buffer_size > 0
         dataset = dataset.shuffle(buffer_size)
     # dataset = dataset.batch(batch_size, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
-    dataset = dataset.batch(batch_size, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
+    dataset = dataset.batch(batch_size, drop_remainder=not is_test).prefetch(tf.data.AUTOTUNE)
 
     return dataset
 
 #%% Metric function
 def psnr_metric(y_true, y_pred):
+    """
+    Calculates PSNR between 2 tensors.The max_val argument specifies the dynamic
+    range of the images. For normalized images, set max_val=1.0.
+    """
     return psnr(y_true, y_pred, max_val=1.0)
 
 
 #%% DIAGNOSTICS:
-tensorboard = TensorBoard(log_dir='./logs', histogram_freq=1, write_graph=True, write_images=True)
+#   Run the following command in the terminal to visualize training metrics:
+#   tensorboard --logdir logs/fit
+
+class DiagnosticsCallback(Callback):
+    def on_epoch_end(self, epoch, logs=None):
+        # Logs already include metrics like loss and validation loss
+        psnr = logs.get('psnr_metric')  # Training PSNR
+        val_psnr = logs.get('val_psnr_metric')  # Validation PSNR
+
+        # Safeguard for None values
+        psnr_str = f"{psnr:.2f}" if psnr is not None else "N/A"
+        val_psnr_str = f"{val_psnr:.2f}" if val_psnr is not None else "N/A"
+
+        # Print the metrics
+        print(f"Epoch {epoch + 1}: PSNR = {psnr_str}, Val_PSNR = {val_psnr_str}")
+        
+
+class DebugCallback(Callback):
+    def on_epoch_end(self, epoch, logs=None):
+        print(f"Logs at epoch {epoch + 1}: {logs}")
+        
+
+log_dir = f"logs/fit/{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
+# tensorboard = TensorBoard(log_dir='./logs', histogram_freq=1, write_graph=True, write_images=True)
+tensorboard_callback = TensorBoard(log_dir=log_dir, histogram_freq=1)
+
 
 #%% Create train and test datasets
 train_dataset = create_dataset(train_image_paths, scaling, batch_size, target_size=hr_img_size, augment=True, augment_factor=aug_factor)
-test_dataset = create_dataset(test_image_paths, scaling, batch_size, target_size=hr_img_size, augment=False)
+test_dataset  = create_dataset(test_image_paths,  scaling, batch_size, target_size=hr_img_size, augment=False, is_test=True)
 
-# Check the first few elements of the dataset
+# Check the first few elements of the training dataset
 for lr, hr in train_dataset.take(1):
-    logging.info(f"Low-res shape: {lr.shape}, High-res shape: {hr.shape}")
-    
+    logging.info(f"Training pairs low-res shape: {lr.shape}, High-res shape: {hr.shape}")
+
+# Check the first few elements of the test dataset
+for lr, hr in test_dataset.take(1):
+    logging.info(f"Test pairs low-res shape: {lr.shape}, High-res shape: {hr.shape}")
+print("Hep hep hep!!!!!!!")
 # Calculate the total number of image pairs (depends on amount of data augmentation)
 flat_dataset = train_dataset.unbatch()
 total_image_pairs = flat_dataset.reduce(0, lambda x, _: x + 1).numpy()
@@ -275,17 +309,14 @@ model = Conv2DTranspose(1, (9, 9), strides=(scaling, scaling), padding='same')(m
 
 #%% COMPILE THE MODEL:
 output_img = model
-model = Model(input_img, output_img, name="FSRCNN")
+model = Model(input_img, output_img, name=model_name+'_'+str(scaling)+'X')
 # model.load_weights('./checkpoints/weights-improvement-20-26.93.hdf5')
 
-# Calculates PSNR between 2 tensors.The max_val argument specifies the dynamic
-# range of the images. For normalized images, set max_val=1.0.
-# Lambda Wrapper: this function is used to wrap psnr because Keras requires
-# metrics to have two arguments (y_true, y_pred). The wrapper explicitly passes max_val
+# Wrapper: wrap psnr because Keras requires metrics to have two arguments (y_true, y_pred).
 model.compile(
     optimizer=Adam(learning_rate=0.0001),
     loss='mse',
-    metrics=[MeanMetricWrapper(psnr_metric)])
+    metrics=[MeanMetricWrapper(psnr_metric, name='psnr_metric')])
 
 model.summary() # print the model summary
 
@@ -300,24 +331,49 @@ best_checkpoint = ModelCheckpoint(
 # Save periodic checkpoints every epoch:
 periodic_checkpoint = ModelCheckpoint(filepath="./checkpoints/weights_epoch-{epoch:02d}.h5", save_freq='epoch', verbose=1)
 
-callbacks_list = [best_checkpoint, periodic_checkpoint, tensorboard] # Define checkpoints callback
+early_stopping = EarlyStopping(
+                    monitor='val_psnr_metric',  # Stop if validation PSNR stops improving
+                    patience=10,                # Number of epochs to wait for improvement
+                    restore_best_weights=True)  # Restore weights from the best epoch
+
+callbacks_list = [best_checkpoint, periodic_checkpoint, tensorboard_callback, early_stopping, DiagnosticsCallback()] # Define checkpoints callback
 # callbacks_list = [checkpoint, plot_losses, tensorboard]
 
 
 #%% Train the model
 #----------------
-model.fit(train_dataset,
-          steps_per_epoch = ceil(total_image_pairs / batch_size),
-          validation_data=test_dataset,
-          epochs=epochs,
-          callbacks=callbacks_list)
+history = model.fit(train_dataset,
+              steps_per_epoch = ceil(total_image_pairs / batch_size),
+              validation_data=test_dataset,
+              epochs=epochs,
+              callbacks=callbacks_list)
 
 print("Done training!!!")
 
 print("Saving the final model ...")
 model.save('fsrcnn_model.h5')  # creates a HDF5 file 
-del model  # deletes the existing model
 
+#%% Plot PSNR
+# Access the training history after training:
+# history = model.fit(train_dataset, validation_data=test_dataset, epochs=epochs, callbacks=callbacks_list)
 
+plt.plot(history.history['psnr_metric'], label='Train PSNR')
+plt.plot(history.history['val_psnr_metric'], label='Validation PSNR')
+plt.xlabel('Epoch')
+plt.ylabel('PSNR')
+plt.legend()
+plt.title('PSNR During Training')
+plt.show()
+
+# Plot Loss
+plt.plot(history.history['loss'], label='Train Loss')
+plt.plot(history.history['val_loss'], label='Validation Loss')
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.legend()
+plt.title('Loss During Training')
+plt.show()
+
+# del model  # deletes the existing model
 
 

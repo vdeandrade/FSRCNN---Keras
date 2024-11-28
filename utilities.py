@@ -20,31 +20,26 @@ for i in file_list:
     img.save(file_name_saved)
     # print(file_name_saved)
 
-#%%
-cnt=0
-for i in range(3):
-    cnt+=1
-    print(cnt)
 
 #%% Displaying Basic Information:
 # You can loop through the dataset and print out details about each element,
 # such as shape and dtype:
-for element in train_dataset.take(5):  # Limit the output to the first 5 elements
-    lr_image, hr_image = element
-    print("Low-Resolution Image Shape:", lr_image.shape)
-    print("Low-Resolution Image Type:", lr_image.dtype)
-    print("High-Resolution Image Shape:", hr_image.shape)
-    print("High-Resolution Image Type:", hr_image.dtype)
-    print("------")
+# for element in train_dataset.take(5):  # Limit the output to the first 5 elements
+#     lr_image, hr_image = element
+#     print("Low-Resolution Image Shape:", lr_image.shape)
+#     print("Low-Resolution Image Type:", lr_image.dtype)
+#     print("High-Resolution Image Shape:", hr_image.shape)
+#     print("High-Resolution Image Type:", hr_image.dtype)
+#     print("------")
 
 #%%
-for element in test_dataset.take(5):  # Limit the output to the first 5 elements
-    lr_image, hr_image = element
-    print("Low-Resolution Image Shape:", lr_image.shape)
-    print("Low-Resolution Image Type:", lr_image.dtype)
-    print("High-Resolution Image Shape:", hr_image.shape)
-    print("High-Resolution Image Type:", hr_image.dtype)
-    print("------")
+# for element in test_dataset.take(5):  # Limit the output to the first 5 elements
+#     lr_image, hr_image = element
+#     print("Low-Resolution Image Shape:", lr_image.shape)
+#     print("Low-Resolution Image Type:", lr_image.dtype)
+#     print("High-Resolution Image Shape:", hr_image.shape)
+#     print("High-Resolution Image Type:", hr_image.dtype)
+#     print("------")
 
 
 #%%
@@ -71,9 +66,10 @@ def inspect_dataset(dataset, num_elements=5):
             print("------")
 
 # Call the function to inspect the dataset
-inspect_dataset(dataset)
+# inspect_dataset(dataset)
 
 
+#%%
 # Convert Tensor to Numpy for Further Inspection: To get more detailed insights,
 # you can convert TensorFlow tensors to NumPy arrays and inspect their content.
 def inspect_dataset_content(dataset, num_elements=5):
@@ -87,7 +83,7 @@ def inspect_dataset_content(dataset, num_elements=5):
             print(f"Single Element content (first few values): {element_np.flat[:5]}")
 
 # Call the function to inspect the content of the dataset
-inspect_dataset_content(dataset)
+# inspect_dataset_content(dataset)
 
 # Summarize Dataset: Create a summary function to provide a comprehensive overview
 # of the dataset, including the shapes and types of the first few elements.
@@ -111,14 +107,5 @@ def summarize_dataset(dataset, num_elements=5):
             print("------")
 
 # Call the function to summarize the dataset
-summarize_dataset(dataset)
-
-#%%
-input_size = 85
-strides = 3
-kernel_size = 12
-padding = (kernel_size - 1) // 2
-output_size = (input_size - 1) * strides + kernel_size - 2 * padding
-print(output_size)
-
+# summarize_dataset(dataset)
 
