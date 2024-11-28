@@ -22,7 +22,7 @@ img_size = (256, 256, 1)
 batch_size = 64
 epochs = 500
 im_scaling = 3
-aug_factor = 5 # will add to the training data X times the amount of training data
+aug_factor = 5 # the size of the training dataset will be increase "aug_factor" times
 #--------------------------------------------------
 
 #%% FUNCTIONS:
